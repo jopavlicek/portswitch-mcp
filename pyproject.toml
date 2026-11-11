@@ -1,0 +1,16 @@
+[project]
+name = "portswitch"
+version = "0.1.0"
+description = "MCP server that helps AI coding agents resolve dev-environment port conflicts safely"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=2.3,<3",
+]
+
+[project.scripts]
+portswitch = "portswitch.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
