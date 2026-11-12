@@ -43,7 +43,9 @@ class DockerError(Exception):
 
 def _run(cmd: list[str], cwd: str | None = None) -> str:
     try:
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True).stdout
+        return subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+        ).stdout
     except FileNotFoundError as e:
         raise DockerError("Docker CLI not found. Is Docker installed and on PATH?") from e
     except subprocess.CalledProcessError as e:
@@ -109,6 +111,23 @@ def _project_containers(path: str) -> list[dict]:
     return found
 
 
+def _docker_published_ports() -> set[int]:
+    """Host ports published by running containers.
+
+    On Linux with Docker's userland proxy turned off, nothing actually listens on these
+    ports, so the bind test in _is_free would wrongly report them as free.
+    """
+    ports = set()
+
+    for c in _running_containers():
+        for bindings in (c["NetworkSettings"]["Ports"] or {}).values():
+            for b in bindings or []:
+                if str(b.get("HostPort", "")).isdigit():
+                    ports.add(int(b["HostPort"]))
+
+    return ports
+
+
 def _is_free(port: int) -> bool:
     """True if nothing on this machine is listening on the host port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -168,8 +187,13 @@ def suggest_free_port(port: int) -> dict:
     for example another agent's git worktree.
     Change only the current project's own port mapping, never the other project's."""
 
+    try:
+        taken_by_docker = _docker_published_ports()
+    except DockerError:
+        taken_by_docker = set()  # Docker not reachable: fall back to the bind test alone
+
     for candidate in range(port, port + 100):
-        if _is_free(candidate):
+        if candidate not in taken_by_docker and _is_free(candidate):
             return {"requested": port, "free_port": candidate}
 
     return {"requested": port, "free_port": None}

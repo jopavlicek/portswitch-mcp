@@ -9,6 +9,17 @@ local dev environments without destroying data.
 - [Docker](https://docs.docker.com/get-docker/) with Docker Compose v2 (`docker compose`)
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)**, the Python package manager
 
+### Linux only: let your user talk to Docker
+
+With Docker Engine on Linux (not Docker Desktop), `docker ps` must work without `sudo`,
+otherwise every tool returns a "permission denied ... docker.sock" error. Either use
+rootless Docker, or add yourself to the `docker` group and log out and back in:
+
+```bash
+sudo usermod -aG docker $USER
+docker ps   # after logging back in: must work without sudo
+```
+
 ## Setup (once per machine)
 
 In the repo root run:
