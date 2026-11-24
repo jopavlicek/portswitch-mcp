@@ -1,0 +1,33 @@
+# Same repo, checked out in two git worktrees. Both default to app on 3000 and PostgreSQL on 5432.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: python:3.12-alpine
+    command: python /app/health.py
+    environment:
+      DB_HOST: db
+    volumes:
+      - ./health.py:/app/health.py:ro
+    ports:
+      - "${APP_PORT:-3000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
