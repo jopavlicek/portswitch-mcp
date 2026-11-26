@@ -38,6 +38,11 @@ mcp = MCPServer(
 # Helpers (not visible for agents)
 # ---------------------------------------------------------------------------
 
+# Folders explicitly identified as conflicting compose projects by check_conflicts
+# in this server session. stop_project refuses to stop any folder not in this set.
+_identified_conflict_folders: set[str] = set()
+
+
 class DockerError(Exception):
     """A docker command failed; the message is safe to show to the agent."""
 
@@ -62,10 +67,13 @@ def _running_containers() -> list[dict]:
     return json.loads(_run(["docker", "inspect", *ids]))
 
 
-def _owner(port: int) -> dict | None:
+def _owner(port: int, containers: list[dict] | None = None) -> dict | None:
     """Which running container publishes this host port, and from which folder."""
 
-    for c in _running_containers():
+    if containers is None:
+        containers = _running_containers()
+
+    for c in containers:
         for bindings in (c["NetworkSettings"]["Ports"] or {}).values():
             for b in bindings or []:
                 if b.get("HostPort") == str(port):
@@ -82,13 +90,17 @@ def _project_ports(path: str) -> list[int]:
     """Host ports the compose project in `path` wants (reads docker-compose.yml + .env)."""
 
     config = json.loads(_run(["docker", "compose", "config", "--format", "json"], cwd=path))
-    ports = []
+    ports: list[int] = []
+    seen: set[int] = set()
 
     for service in config.get("services", {}).values():
         for p in service.get("ports", []):
             published = str(p.get("published", ""))
             if published.isdigit():
-                ports.append(int(published))
+                port_num = int(published)
+                if port_num not in seen:
+                    seen.add(port_num)
+                    ports.append(port_num)
 
     return ports
 
@@ -157,13 +169,16 @@ def _is_anonymous_volume(name: str) -> bool:
     return len(name) == 64 and all(ch in "0123456789abcdef" for ch in name)
 
 
-def _project_data(folder: str) -> dict:
+def _project_data(folder: str, containers: list[dict] | None = None) -> dict:
     """Volumes and bind mounts of all running containers started from `folder`."""
+
+    if containers is None:
+        containers = _running_containers()
 
     here = os.path.realpath(folder)
     named, anonymous, binds = set(), set(), set()
 
-    for c in _running_containers():
+    for c in containers:
         labels = c["Config"]["Labels"] or {}
         wd = labels.get("com.docker.compose.project.working_dir")
         if not wd or os.path.realpath(wd) != here:
@@ -224,8 +239,11 @@ def check_conflicts(path: str) -> dict:
     conflicts = []
 
     try:
-        for port in _project_ports(path):
-            owner = _owner(port)
+        ports = _project_ports(path)
+        containers = _running_containers() if ports else []
+
+        for port in ports:
+            owner = _owner(port, containers=containers)
 
             if owner is None:
                 # Not a Docker container, but something else may still hold the port.
@@ -246,8 +264,9 @@ def check_conflicts(path: str) -> dict:
                     "note": "Container not started by docker compose. Do not remove it; use suggest_free_port.",
                 })
             elif os.path.realpath(folder) != here:
+                _identified_conflict_folders.add(os.path.realpath(folder))
                 same_repo = _same_repo(here, folder)
-                data = _project_data(folder)
+                data = _project_data(folder, containers=containers)
                 conflicts.append({
                     "port": port, **owner,
                     "same_repo_worktree": same_repo,
@@ -269,12 +288,19 @@ def suggest_free_port(port: int) -> dict:
     for example another agent's git worktree.
     Change only the current project's own port mapping, never the other project's."""
 
+    if port < 1 or port > 65535:
+        return {
+            "requested": port,
+            "free_port": None,
+            "error": "Port must be between 1 and 65535.",
+        }
+
     try:
         taken_by_docker = _docker_published_ports()
     except DockerError:
         taken_by_docker = set()  # Docker not reachable: fall back to the bind test alone
 
-    for candidate in range(port, port + 100):
+    for candidate in range(port, min(port + 100, 65536)):
         if candidate not in taken_by_docker and _is_free(candidate):
             return {"requested": port, "free_port": candidate}
 
@@ -293,6 +319,16 @@ def stop_project(path: str) -> dict:
     Only call this after the user has explicitly agreed to stop that project."""
 
     here = os.path.realpath(path)
+
+    if here not in _identified_conflict_folders:
+        return {
+            "project_folder": here,
+            "stopped": [],
+            "error": (
+                "Refused to stop this folder because it was not identified as a conflicting "
+                "project by check_conflicts in this session. Call check_conflicts first."
+            ),
+        }
 
     try:
         containers = _project_containers(here)

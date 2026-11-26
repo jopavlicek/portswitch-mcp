@@ -9,7 +9,7 @@ Run:   uv run mcp dev src/portswitch/debug_server.py
 Never register this file in .mcp.json - agents should only see server.py.
 """
 
-from server import (
+from portswitch.server import (
     _docker_published_ports, _git_common_dir, _is_free, _owner, _project_containers,
     _project_data, _project_ports, _running_containers, mcp,
 )
