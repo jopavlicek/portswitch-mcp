@@ -8,6 +8,11 @@ dependencies = [
     "mcp[cli]>=2.3,<3",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
 [project.scripts]
 portswitch = "portswitch.server:main"
 
